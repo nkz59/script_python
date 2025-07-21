@@ -1,0 +1,110 @@
+import re  # Module pour les expressions régulières
+import ipaddress  # Module pour la gestion et validation des adresses IP
+import requests  # Module pour effectuer des requêtes HTTP
+from datetime import datetime  # Pour récupérer la date et l'heure courantes
+import os  # Module pour gérer les opérations système (fichiers, dossiers)
+from urllib.parse import urlparse  # Pour analyser la structure des URLs
+import traceback  # Pour afficher le détail complet des erreurs
+
+# --- CONFIGURATION ---
+url_fichier = "https://raw.githubusercontent.com/romainmarcoux/malicious-ip/refs/heads/main/full-40k.txt"  # URL du fichier à télécharger
+dossier_sortie = r"C:\Users\w136849\Videos\script recup ip"  # Dossier local où seront enregistrés les fichiers
+
+# --- UTILITAIRES ---
+
+def valider_url(url):
+    """Vérifie que l'URL est bien formée"""
+    try:
+        result = urlparse(url)  # Analyse l'URL en composantes
+        return all([result.scheme in ("http", "https"), result.netloc])  # Vérifie le schéma (http/https) et le nom de domaine
+    except Exception:
+        return False  # En cas d'erreur, considère l'URL comme invalide
+
+def est_ip_valide(ip_str):
+    """Vérifie si une chaîne est une IPv4 valide"""
+    try:
+        ipaddress.IPv4Address(ip_str)  # Tente de créer un objet IPv4Address, lèvera une exception si invalide
+        return True  # Si pas d'erreur, l'IP est valide
+    except ipaddress.AddressValueError:
+        return False  # IP invalide
+
+def log_message(message, log_path):
+    """Écrit un message dans la console ET dans le fichier log"""
+    print(message)  # Affiche le message dans la console
+    with open(log_path, "a", encoding="utf-8") as log_file:  # Ouvre (ou crée) le fichier log en mode ajout
+        log_file.write(message + "\n")  # Écrit le message avec un retour à la ligne
+
+# --- TRAITEMENT PRINCIPAL ---
+
+# Création du dossier de sortie si besoin
+os.makedirs(dossier_sortie, exist_ok=True)  # Crée le dossier si il n'existe pas (sinon ne fait rien)
+
+# Préparation des fichiers horodatés
+horodatage = datetime.now().strftime("%d-%m-%y_%H-%M-%S")  # Formatage de la date/heure actuelle pour nommer les fichiers
+fichier_ip = os.path.join(dossier_sortie, f"blacklist_{horodatage}.txt")  # Chemin complet du fichier IP à créer
+fichier_log = os.path.join(dossier_sortie, f"log_{horodatage}.txt")  # Chemin complet du fichier log à créer
+
+try:
+    # 1. Vérifier l'URL
+    if not valider_url(url_fichier):  # Vérifie la validité de l'URL
+        raise ValueError(f"URL invalide : {url_fichier}")  # Lève une erreur si l'URL est invalide
+    
+    log_message(f"Téléchargement depuis : {url_fichier}", fichier_log)  # Log de début de téléchargement
+
+    # 2. Télécharger le fichier
+    reponse = requests.get(url_fichier, timeout=10)  # Envoi la requête HTTP GET avec un timeout de 10 secondes
+    reponse.raise_for_status()  # Vérifie si la requête s'est bien passée (code 200)
+    contenu = reponse.text.strip()  # Récupère le contenu texte du fichier téléchargé et enlève espaces en début/fin
+
+    # 3. Vérifier si le contenu est vide
+    if not contenu:  # Si le contenu est vide
+        raise ValueError("La source est vide.")  # Lève une erreur
+
+    # 4. Prétraiter les lignes (ignorer les CIDR)
+    lignes = contenu.splitlines()  # Sépare le contenu en liste de lignes
+    lignes_sans_ranges = [ligne for ligne in lignes if '/' not in ligne]  # Garde uniquement les lignes sans '/' (exclut les CIDR)
+
+    # 5. Expression régulière pour IP
+    regex_ip = re.compile(
+        r"\b("  # Début groupe capture IP complète
+        r"(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\."  # Premier octet (0-255)
+        r"(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\."  # Deuxième octet
+        r"(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\."  # Troisième octet
+        r"(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)"    # Quatrième octet
+        r")\b"  # Fin groupe capture IP
+    )
+
+    ip_candidates = []  # Liste pour stocker toutes les IP trouvées
+    for ligne in lignes_sans_ranges:  # Pour chaque ligne filtrée
+        matches = regex_ip.findall(ligne)  # Recherche toutes les IP dans la ligne
+        ip_candidates.extend([match[0] for match in matches])  # Ajoute toutes les IP trouvées
+
+    ip_valides = {ip for ip in ip_candidates if est_ip_valide(ip)}  # Filtre les IP pour ne garder que les valides (sans doublons)
+
+    log_message(f"Total d'IP (hors ranges) trouvées dans la source : {len(ip_candidates)}", fichier_log)  # Log du nombre brut d'IP trouvées
+    log_message(f"Total d'IP valides extraites : {len(ip_valides)}", fichier_log)  # Log du nombre d'IP validées
+
+    # 6. Écriture des IP dans le fichier
+    with open(fichier_ip, "w", encoding="utf-8") as f:  # Ouvre le fichier en écriture
+        for ip in sorted(ip_valides):  # Pour chaque IP triée par ordre alphabétique
+            f.write(ip + "\n")  # Écrit l'IP dans le fichier avec un saut de ligne
+
+    log_message(f"\n IP extraites enregistrées ici : {fichier_ip}", fichier_log)  # Log de succès avec chemin du fichier IP
+
+# --- GESTION D’ERREURS ---
+
+except requests.exceptions.Timeout:  # Si la requête HTTP a dépassé le temps limite
+    log_message("Erreur : La requête a expiré (timeout).", fichier_log)
+
+except requests.exceptions.HTTPError as e:  # Pour les erreurs HTTP (404, 500, etc.)
+    log_message(f" Erreur HTTP : {e.response.status_code} - {e.response.reason}", fichier_log)
+
+except requests.exceptions.RequestException as e:  # Pour d'autres erreurs liées à la requête
+    log_message(f"Erreur de connexion : {type(e).__name__} - {e}", fichier_log)
+
+except ValueError as e:  # Pour les erreurs levées volontairement dans le code (URL invalide, source vide)
+    log_message(f"Erreur de validation : {e}", fichier_log)
+
+except Exception as e:  # Pour toute autre erreur inattendue
+    log_message(f"Erreur inattendue : {type(e).__name__} - {e}", fichier_log)
+    log_message(traceback.format_exc(), fichier_log)  # Écrit la trace complète de l'erreur dans le log
