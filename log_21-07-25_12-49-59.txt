@@ -1,0 +1,5 @@
+Téléchargement depuis : https://raw.githubusercontent.com/romainmarcoux/malicious-ip/refs/heads/main/full-40k.txt
+Total d'IP (hors ranges) trouvées dans la source : 40000
+Total d'IP valides extraites : 40000
+
+ IP extraites enregistrées ici : C:\Users\w136849\Videos\script recup ip\blacklist_21-07-25_12-49-59.txt
